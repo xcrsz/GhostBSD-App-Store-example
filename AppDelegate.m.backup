@@ -1,0 +1,783 @@
+#import "AppDelegate.h"
+#import "Package.h"
+#import "PackageManager.h"
+#import "PasswordPanel.h"
+#import "PackageDetailWindow.h"
+#import "CategoryWindow.h"
+#import "SudoManager.h"
+
+@implementation AppDelegate
+
+@synthesize window, packageManager, passwordPanel, detailWindow, categoryWindow;
+
+- (void)applicationDidFinishLaunching:(NSNotification *)notification
+{
+    // Initialize managers
+    self.packageManager = [PackageManager sharedManager];
+    self.passwordPanel = [[PasswordPanel alloc] init];
+    self.detailWindow = [[PackageDetailWindow alloc] init];
+    self.detailWindow.delegate = self;
+    self.categoryWindow = [[CategoryWindow alloc] init];
+    self.categoryWindow.delegate = self;
+    
+    // Initialize data
+    packages = [[NSMutableArray alloc] init];
+    updatesAvailable = NO;
+
+    [self setupMainWindow];
+    [self setupNavigationBar];
+    [self setupSearchField];
+    [self setupWelcomeMessage];  // Add welcome message setup
+    [self setupTableView];
+    [self setupProgressIndicators];
+    [self setupUpdateTimer];
+    
+    // Show welcome message initially instead of featured packages
+    [self showWelcomeMessage:YES];
+    
+    [window center];
+    [window makeKeyAndOrderFront:nil];
+}
+
+- (void)setupMainWindow
+{
+    // Create fixed size window - 1366x768
+    window = [[NSWindow alloc] initWithContentRect:NSMakeRect(100, 100, 1366, 768)
+                                        styleMask:NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask
+                                          backing:NSBackingStoreBuffered
+                                            defer:NO];
+    [window setTitle:@"GhostBSD App Store"];
+    
+    // Disable resizing
+    [window setMinSize:NSMakeSize(1366, 768)];
+    [window setMaxSize:NSMakeSize(1366, 768)];
+}
+
+- (void)setupNavigationBar
+{
+    featuredButton = [[NSButton alloc] initWithFrame:NSMakeRect(20, 720, 120, 30)];
+    [featuredButton setTitle:@"Featured"];
+    [featuredButton setBezelStyle:NSRoundedBezelStyle];
+    [featuredButton setTarget:self];
+    [featuredButton setAction:@selector(showFeatured:)];
+    [[window contentView] addSubview:featuredButton];
+
+    categoriesButton = [[NSButton alloc] initWithFrame:NSMakeRect(150, 720, 120, 30)];
+    [categoriesButton setTitle:@"Categories"];
+    [categoriesButton setBezelStyle:NSRoundedBezelStyle];
+    [categoriesButton setTarget:self];
+    [categoriesButton setAction:@selector(showCategories:)];
+    [[window contentView] addSubview:categoriesButton];
+
+    updatesButton = [[NSButton alloc] initWithFrame:NSMakeRect(280, 720, 120, 30)];
+    [updatesButton setTitle:@"Updates"];
+    [updatesButton setBezelStyle:NSRoundedBezelStyle];
+    [updatesButton setTarget:self];
+    [updatesButton setAction:@selector(showUpdates:)];
+    [[window contentView] addSubview:updatesButton];
+    
+    // Add category label to show current category
+    categoryLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 690, 400, 20)];
+    [categoryLabel setStringValue:@""];
+    [categoryLabel setBezeled:NO];
+    [categoryLabel setDrawsBackground:NO];
+    [categoryLabel setEditable:NO];
+    [categoryLabel setFont:[NSFont systemFontOfSize:12]];
+    [categoryLabel setTextColor:[NSColor grayColor]];
+    [[window contentView] addSubview:categoryLabel];
+}
+
+- (void)setupSearchField
+{
+    searchField = [[NSTextField alloc] initWithFrame:NSMakeRect(1150, 720, 200, 24)];
+    [searchField setPlaceholderString:@"Search Apps"];
+    [searchField setDelegate:self];
+    [[searchField cell] setSendsActionOnEndEditing:NO];
+    [searchField setTarget:self];
+    [searchField setAction:@selector(searchPackages:)];
+    [[window contentView] addSubview:searchField];
+}
+
+- (void)setupWelcomeMessage
+{
+    // Create main welcome title
+    NSTextField *welcomeTitle = [[NSTextField alloc] initWithFrame:NSMakeRect(200, 320, 400, 40)];
+    [welcomeTitle setStringValue:@"Welcome to the GhostBSD App Store"];
+    [welcomeTitle setBezeled:NO];
+    [welcomeTitle setDrawsBackground:NO];
+    [welcomeTitle setEditable:NO];
+    [welcomeTitle setFont:[NSFont boldSystemFontOfSize:18]];
+    [welcomeTitle setTextColor:[NSColor blackColor]];
+    [welcomeTitle setAlignment:NSCenterTextAlignment];
+    [[window contentView] addSubview:welcomeTitle];
+    
+    // Create subtitle with instructions
+    NSTextField *welcomeSubtitle = [[NSTextField alloc] initWithFrame:NSMakeRect(150, 220, 500, 80)];
+    [welcomeSubtitle setStringValue:@"Discover and install applications for your GhostBSD system.\n\n• Click Featured to browse popular applications\n• Use Categories to explore software by type\n• Search for specific packages using the search box"];
+    [welcomeSubtitle setBezeled:NO];
+    [welcomeSubtitle setDrawsBackground:NO];
+    [welcomeSubtitle setEditable:NO];
+    [welcomeSubtitle setFont:[NSFont systemFontOfSize:14]];
+    [welcomeSubtitle setTextColor:[NSColor darkGrayColor]];
+    [welcomeSubtitle setAlignment:NSCenterTextAlignment];
+    
+    // Make it a multi-line text field
+    NSTextFieldCell *subtitleCell = [welcomeSubtitle cell];
+    [subtitleCell setWraps:YES];
+    [subtitleCell setScrollable:NO];
+    [[window contentView] addSubview:welcomeSubtitle];
+    
+    // Remove the question mark icon completely - no icon needed
+    
+    // Store all welcome elements in an array for easy management
+    welcomeElements = [[NSMutableArray alloc] initWithObjects:welcomeTitle, welcomeSubtitle, nil];
+    
+    // For compatibility, keep welcomeLabel pointing to the main title
+    welcomeLabel = welcomeTitle;
+    
+    [welcomeTitle retain]; // Keep reference for welcomeLabel
+    [welcomeSubtitle release];
+}
+
+- (void)setupTableView
+{
+    // Reduce scroll view height to leave room for manual headers
+    scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 45, 760, 455)];
+    
+    // Enhanced scroll view configuration
+    [scrollView setHasVerticalScroller:YES];
+    [scrollView setHasHorizontalScroller:NO];
+    [scrollView setAutohidesScrollers:NO];
+    [scrollView setBorderType:NSBezelBorder];
+    [scrollView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    
+    packageTable = [[NSTableView alloc] initWithFrame:[scrollView bounds]];
+    
+    // Enhanced table view configuration
+    [packageTable setAllowsMultipleSelection:NO];
+    [packageTable setAllowsEmptySelection:YES];
+    [packageTable setAllowsColumnSelection:NO];
+    [packageTable setAllowsColumnReordering:NO];
+    [packageTable setAllowsColumnResizing:YES];
+    [packageTable setUsesAlternatingRowBackgroundColors:YES];
+    [packageTable setGridStyleMask:NSTableViewSolidVerticalGridLineMask];
+    
+    // Create table columns
+    NSTableColumn *iconColumn = [[NSTableColumn alloc] initWithIdentifier:@"icon"];
+    [iconColumn setWidth:50];
+    [iconColumn setMinWidth:50];
+    [iconColumn setMaxWidth:50];
+    [iconColumn setTitle:@"Icon"];
+    [iconColumn setResizingMask:NSTableColumnNoResizing];
+    
+    NSTableColumn *nameColumn = [[NSTableColumn alloc] initWithIdentifier:@"name"];
+    [nameColumn setWidth:150];
+    [nameColumn setMinWidth:100];
+    [nameColumn setMaxWidth:200];
+    [nameColumn setTitle:@"Name"];
+    [nameColumn setResizingMask:NSTableColumnAutoresizingMask];
+    
+    NSTableColumn *descColumn = [[NSTableColumn alloc] initWithIdentifier:@"desc"];
+    [descColumn setWidth:350];
+    [descColumn setMinWidth:200];
+    [descColumn setTitle:@"Description"];
+    [descColumn setResizingMask:NSTableColumnAutoresizingMask];
+    
+    NSTableColumn *installColumn = [[NSTableColumn alloc] initWithIdentifier:@"install"];
+    [installColumn setWidth:80];
+    [installColumn setMinWidth:80];
+    [installColumn setMaxWidth:100];
+    [installColumn setTitle:@"Install"];
+    [installColumn setResizingMask:NSTableColumnNoResizing];
+    
+    NSTableColumn *uninstallColumn = [[NSTableColumn alloc] initWithIdentifier:@"uninstall"];
+    [uninstallColumn setWidth:80];
+    [uninstallColumn setMinWidth:80];
+    [uninstallColumn setMaxWidth:100];
+    [uninstallColumn setTitle:@"Remove"];
+    [uninstallColumn setResizingMask:NSTableColumnNoResizing];
+    
+    // Add columns to table
+    [packageTable addTableColumn:iconColumn];
+    [packageTable addTableColumn:nameColumn];
+    [packageTable addTableColumn:descColumn];
+    [packageTable addTableColumn:installColumn];
+    [packageTable addTableColumn:uninstallColumn];
+    
+    // For GNUstep, explicitly disable header view since it may not work properly
+    [packageTable setHeaderView:nil];
+    
+    [packageTable setDataSource:self];
+    [packageTable setDelegate:self];
+    [packageTable setDoubleAction:@selector(showDetails:)];
+    
+    // Set the table as the document view
+    [scrollView setDocumentView:packageTable];
+    
+    // Create manual column headers above the table view for GNUstep compatibility
+    [self createManualColumnHeaders];
+    
+    // Add to window - initially hidden since we show welcome message first
+    [scrollView setHidden:YES];
+    [[window contentView] addSubview:scrollView];
+    
+    // Clean up
+    [iconColumn release];
+    [nameColumn release];
+    [descColumn release];
+    [installColumn release];
+    [uninstallColumn release];
+}
+
+- (void)createManualColumnHeaders
+{
+    // Create a background view for headers - fixed size for 1366x768
+    NSView *headerBackground = [[NSView alloc] initWithFrame:NSMakeRect(20, 660, 1326, 25)];
+    [[window contentView] addSubview:headerBackground];
+    
+    // Create individual header labels to match column positions
+    NSTextField *iconHeader = [[NSTextField alloc] initWithFrame:NSMakeRect(2, 2, 60, 21)];
+    [iconHeader setStringValue:@"Icon"];
+    [iconHeader setFont:[NSFont boldSystemFontOfSize:11]];
+    [iconHeader setBezeled:NO];
+    [iconHeader setDrawsBackground:YES];
+    [iconHeader setBackgroundColor:[NSColor controlBackgroundColor]];
+    [iconHeader setEditable:NO];
+    [iconHeader setAlignment:NSCenterTextAlignment];
+    [headerBackground addSubview:iconHeader];
+    
+    NSTextField *nameHeader = [[NSTextField alloc] initWithFrame:NSMakeRect(62, 2, 200, 21)];
+    [nameHeader setStringValue:@"Name"];
+    [nameHeader setFont:[NSFont boldSystemFontOfSize:11]];
+    [nameHeader setBezeled:NO];
+    [nameHeader setDrawsBackground:YES];
+    [nameHeader setBackgroundColor:[NSColor controlBackgroundColor]];
+    [nameHeader setEditable:NO];
+    [nameHeader setAlignment:NSCenterTextAlignment];
+    [headerBackground addSubview:nameHeader];
+    
+    NSTextField *descHeader = [[NSTextField alloc] initWithFrame:NSMakeRect(262, 2, 800, 21)];
+    [descHeader setStringValue:@"Description"];
+    [descHeader setFont:[NSFont boldSystemFontOfSize:11]];
+    [descHeader setBezeled:NO];
+    [descHeader setDrawsBackground:YES];
+    [descHeader setBackgroundColor:[NSColor controlBackgroundColor]];
+    [descHeader setEditable:NO];
+    [descHeader setAlignment:NSCenterTextAlignment];
+    [headerBackground addSubview:descHeader];
+    
+    NSTextField *installHeader = [[NSTextField alloc] initWithFrame:NSMakeRect(1062, 2, 100, 21)];
+    [installHeader setStringValue:@"Install"];
+    [installHeader setFont:[NSFont boldSystemFontOfSize:11]];
+    [installHeader setBezeled:NO];
+    [installHeader setDrawsBackground:YES];
+    [installHeader setBackgroundColor:[NSColor controlBackgroundColor]];
+    [installHeader setEditable:NO];
+    [installHeader setAlignment:NSCenterTextAlignment];
+    [headerBackground addSubview:installHeader];
+    
+    NSTextField *removeHeader = [[NSTextField alloc] initWithFrame:NSMakeRect(1162, 2, 100, 21)];
+    [removeHeader setStringValue:@"Remove"];
+    [removeHeader setFont:[NSFont boldSystemFontOfSize:11]];
+    [removeHeader setBezeled:NO];
+    [removeHeader setDrawsBackground:YES];
+    [removeHeader setBackgroundColor:[NSColor controlBackgroundColor]];
+    [removeHeader setEditable:NO];
+    [removeHeader setAlignment:NSCenterTextAlignment];
+    [headerBackground addSubview:removeHeader];
+    
+    // Store header elements for show/hide management
+    if (!headerElements) {
+        headerElements = [[NSMutableArray alloc] init];
+    }
+    [headerElements addObject:headerBackground];
+    
+    // Release individual headers (they're retained by their parent view)
+    [headerBackground release];
+    [iconHeader release];
+    [nameHeader release];
+    [descHeader release];
+    [installHeader release];
+    [removeHeader release];
+}
+
+- (void)setupProgressIndicators
+{
+    searchProgress = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(1120, 720, 24, 24)];
+    [searchProgress setStyle:NSProgressIndicatorSpinningStyle];
+    [searchProgress setHidden:YES];
+    [[window contentView] addSubview:searchProgress];
+
+    updateProgress = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(1000, 720, 100, 20)];
+    [updateProgress setStyle:NSProgressIndicatorBarStyle];
+    [updateProgress setMinValue:0];
+    [updateProgress setMaxValue:100];
+    [updateProgress setHidden:YES];
+    [[window contentView] addSubview:updateProgress];
+
+    updateStatus = [[NSTextField alloc] initWithFrame:NSMakeRect(850, 720, 120, 30)];
+    [updateStatus setStringValue:@""];
+    [updateStatus setBezeled:NO];
+    [updateStatus setDrawsBackground:NO];
+    [updateStatus setEditable:NO];
+    [[window contentView] addSubview:updateStatus];
+} 100, 20)];
+    [updateProgress setStyle:NSProgressIndicatorBarStyle];
+    [updateProgress setMinValue:0];
+    [updateProgress setMaxValue:100];
+    [updateProgress setHidden:YES];
+    [updateProgress setAutoresizingMask:NSViewMinXMargin | NSViewMaxYMargin]; // Stay at top-right
+    [[window contentView] addSubview:updateProgress];
+
+    updateStatus = [[NSTextField alloc] initWithFrame:NSMakeRect(350, 540, 100, 30)];
+    [updateStatus setStringValue:@""];
+    [updateStatus setBezeled:NO];
+    [updateStatus setDrawsBackground:NO];
+    [updateStatus setEditable:NO];
+    [updateStatus setAutoresizingMask:NSViewMinXMargin | NSViewMaxYMargin]; // Stay at top-right
+    [[window contentView] addSubview:updateStatus];
+}
+
+- (void)setupUpdateTimer
+{
+    updateCheckTimer = [NSTimer scheduledTimerWithTimeInterval:3600
+                                                       target:self
+                                                     selector:@selector(performUpdateCheck:)
+                                                     userInfo:nil
+                                                      repeats:YES];
+}
+
+#pragma mark - Welcome Message Control
+
+- (void)showWelcomeMessage:(BOOL)show
+{
+    // Hide/show all welcome elements
+    for (NSTextField *element in welcomeElements) {
+        [element setHidden:!show];
+    }
+    [scrollView setHidden:show];
+    
+    // Hide/show manual column headers
+    for (NSView *headerElement in headerElements) {
+        [headerElement setHidden:show];
+    }
+    
+    if (show) {
+        // Clear any existing category label when showing welcome
+        [self updateCategoryLabel:@""];
+        // Clear the package list
+        [packages removeAllObjects];
+        [packageTable reloadData];
+    }
+}
+
+#pragma mark - Navigation Actions
+
+- (void)showFeatured:(id)sender
+{
+    [self showWelcomeMessage:NO];  // Hide welcome message
+    [self updateCategoryLabel:@"Featured Applications"];
+    [self.packageManager getFeaturedPackagesWithCompletion:^(NSArray *packageList, NSString *errorMessage) {
+        if (packageList) {
+            [self reloadPackageList:packageList];
+        }
+    }];
+}
+
+- (void)showCategories:(id)sender
+{
+    [self showWelcomeMessage:NO];  // Hide welcome message
+    [self.categoryWindow showCategoryWindow];
+}
+
+- (void)showUpdates:(id)sender
+{
+    [self showWelcomeMessage:NO];  // Hide welcome message
+    [self updateCategoryLabel:@"Available Updates"];
+    [updateProgress setHidden:NO];
+    [updateProgress startAnimation:nil];
+    
+    [self.packageManager getAvailableUpdatesWithCompletion:^(NSArray *packageList, NSString *errorMessage) {
+        [updateProgress stopAnimation:nil];
+        [updateProgress setHidden:YES];
+        
+        if (packageList) {
+            updatesAvailable = [packageList count] > 0;
+            [self reloadPackageList:packageList];
+            [self updateStatusText:updatesAvailable ? @"Updates Available" : @""];
+        }
+    }];
+}
+
+#pragma mark - Category Window Delegate
+
+- (void)categoryWindow:(CategoryWindow *)catWindow didSelectCategory:(NSString *)category
+{
+    [self showWelcomeMessage:NO];  // Hide welcome message
+    
+    // Convert category name to display name
+    NSString *displayName = [self displayNameForCategory:category];
+    [self updateCategoryLabel:[NSString stringWithFormat:@"Category: %@", displayName]];
+    
+    [self showSearchProgress:YES];
+    
+    [self.packageManager getPackagesByCategory:category completion:^(NSArray *packageList, NSString *errorMessage) {
+        [self showSearchProgress:NO];
+        
+        if (packageList) {
+            [self reloadPackageList:packageList];
+            
+            if ([packageList count] == 0) {
+                NSRunAlertPanel(@"No Packages Found", 
+                               [NSString stringWithFormat:@"No packages found in the %@ category.", displayName], 
+                               @"OK", nil, nil);
+            }
+        } else if (errorMessage) {
+            NSRunAlertPanel(@"Category Error", errorMessage, @"OK", nil, nil);
+        }
+    }];
+}
+
+- (NSString *)displayNameForCategory:(NSString *)category
+{
+    // Map category names to display names
+    NSDictionary *categoryMap = @{
+        @"multimedia": @"Multimedia",
+        @"www": @"Web Browsers", 
+        @"editors": @"Text Editors",
+        @"graphics": @"Graphics",
+        @"games": @"Games",
+        @"devel": @"Development",
+        @"sysutils": @"System Utilities",
+        @"security": @"Security",
+        @"net": @"Network",
+        @"math": @"Mathematics",
+        @"science": @"Science",
+        @"databases": @"Databases",
+        @"archivers": @"Archivers",
+        @"emulators": @"Emulators",
+        @"finance": @"Finance",
+        @"ftp": @"FTP",
+        @"irc": @"Chat/IRC",
+        @"mail": @"Email",
+        @"news": @"News",
+        @"print": @"Printing"
+    };
+    
+    return [categoryMap objectForKey:category] ?: [category capitalizedString];
+}
+
+#pragma mark - Search Functionality
+
+- (void)searchPackages:(id)sender
+{
+    if (suggestionsMenu) {
+        [suggestionsMenu removeFromSuperview];
+        suggestionsMenu = nil;
+    }
+    if (searchTimer) {
+        [searchTimer invalidate];
+        searchTimer = nil;
+    }
+    searchTimer = [NSTimer scheduledTimerWithTimeInterval:0.3
+                                                  target:self
+                                                selector:@selector(performSearch:)
+                                                userInfo:nil
+                                                 repeats:NO];
+}
+
+- (void)performSearch:(NSTimer *)timer
+{
+    NSString *searchTerm = [[searchField stringValue] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    
+    if ([searchTerm length] == 0) {
+        [self showWelcomeMessage:YES];  // Show welcome message when search is cleared
+        return;
+    }
+
+    [self showWelcomeMessage:NO];  // Hide welcome message when searching
+    [self updateCategoryLabel:[NSString stringWithFormat:@"Search Results for: %@", searchTerm]];
+    [self showSearchProgress:YES];
+    
+    [self.packageManager searchPackagesWithTerm:searchTerm completion:^(NSArray *packageList, NSString *errorMessage) {
+        [self showSearchProgress:NO];
+        
+        if (packageList) {
+            [self reloadPackageList:packageList];
+        } else if (errorMessage) {
+            NSRunAlertPanel(@"Search Failed", errorMessage, @"OK", nil, nil);
+        }
+    }];
+}
+
+- (void)selectSuggestion:(id)sender
+{
+    [searchField setStringValue:[suggestionsMenu titleOfSelectedItem]];
+    [self searchPackages:nil];
+}
+
+- (void)controlTextDidChange:(NSNotification *)notification
+{
+    if ([notification object] == searchField) {
+        // Check if search field is being cleared
+        NSString *searchTerm = [[searchField stringValue] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([searchTerm length] == 0) {
+            // Cancel any pending search timer
+            if (searchTimer) {
+                [searchTimer invalidate];
+                searchTimer = nil;
+            }
+            [self showWelcomeMessage:YES];  // Show welcome message when search is cleared
+        }
+    }
+}
+
+#pragma mark - Update Checking
+
+- (void)performUpdateCheck:(NSTimer *)timer
+{
+    [self.packageManager checkForUpdatesWithCompletion:^(BOOL hasUpdates) {
+        updatesAvailable = hasUpdates;
+        [self updateStatusText:updatesAvailable ? @"Updates Available" : @""];
+    }];
+}
+
+#pragma mark - UI Updates
+
+- (void)reloadPackageList:(NSArray *)packageList
+{
+    [packages removeAllObjects];
+    for (Package *pkg in packageList) {
+        [packages addObject:[pkg toDictionary]];
+    }
+    [packageTable reloadData];
+}
+
+- (void)showSearchProgress:(BOOL)show
+{
+    if (show) {
+        [searchProgress setHidden:NO];
+        [searchProgress startAnimation:nil];
+    } else {
+        [searchProgress stopAnimation:nil];
+        [searchProgress setHidden:YES];
+    }
+}
+
+- (void)updateStatusText:(NSString *)status
+{
+    [updateStatus setStringValue:status ?: @""];
+}
+
+- (void)updateCategoryLabel:(NSString *)categoryName
+{
+    [categoryLabel setStringValue:categoryName ?: @""];
+}
+
+#pragma mark - Package Detail Window Delegate
+
+- (void)packageDetailWindow:(PackageDetailWindow *)detailWin requestInstallFor:(Package *)package
+{
+    // Check if we need to authenticate first
+    SudoManager *sudoManager = [SudoManager sharedManager];
+    if (![sudoManager hasCachedSudoAccess]) {
+        [self reauthenticateIfNeeded];
+        return;
+    }
+    
+    [self.passwordPanel showPasswordPanelWithTitle:@"Authentication Required"
+                                           message:@"Enter sudo password:"
+                                        completion:^(NSString *password, BOOL cancelled) {
+        if (!cancelled && password) {
+            [detailWin updateProgress:0];
+            [self.packageManager installPackage:package.name
+                                        password:password
+                                        progress:^(double progress) {
+                                            [detailWin updateProgress:progress];
+                                        }
+                                      completion:^(BOOL success, NSString *errorMessage) {
+                                          [detailWin hideProgress];
+                                          if (success) {
+                                              NSRunAlertPanel(@"Success", [NSString stringWithFormat:@"Installed %@", package.name], @"OK", nil, nil);
+                                              package.installed = YES;
+                                              [packageTable reloadData];
+                                          } else {
+                                              NSRunAlertPanel(@"Error", errorMessage, @"OK", nil, nil);
+                                          }
+                                      }];
+        }
+    }];
+}
+
+- (void)packageDetailWindow:(PackageDetailWindow *)detailWin requestUninstallFor:(Package *)package
+{
+    // Check if we need to authenticate first
+    SudoManager *sudoManager = [SudoManager sharedManager];
+    if (![sudoManager hasCachedSudoAccess]) {
+        [self reauthenticateIfNeeded];
+        return;
+    }
+    
+    [self.passwordPanel showPasswordPanelWithTitle:@"Authentication Required"
+                                           message:@"Enter sudo password:"
+                                        completion:^(NSString *password, BOOL cancelled) {
+        if (!cancelled && password) {
+            [detailWin updateProgress:0];
+            [self.packageManager uninstallPackage:package.name
+                                          password:password
+                                          progress:^(double progress) {
+                                              [detailWin updateProgress:progress];
+                                          }
+                                        completion:^(BOOL success, NSString *errorMessage) {
+                                            [detailWin hideProgress];
+                                            if (success) {
+                                                NSRunAlertPanel(@"Success", [NSString stringWithFormat:@"Uninstalled %@", package.name], @"OK", nil, nil);
+                                                package.installed = NO;
+                                                [packageTable reloadData];
+                                            } else {
+                                                NSRunAlertPanel(@"Error", errorMessage, @"OK", nil, nil);
+                                            }
+                                        }];
+        }
+    }];
+}
+
+#pragma mark - Table View Data Source & Delegate
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
+{
+    return [packages count];
+}
+
+- (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row
+{
+    NSDictionary *package = [packages objectAtIndex:row];
+    NSString *packageName = [package objectForKey:@"name"];
+    
+    if ([[tableColumn identifier] isEqualToString:@"name"]) {
+        // Handle special headers and categories
+        if ([packageName hasPrefix:@"_HEADER_"]) {
+            return @""; // Don't show anything in name column for headers
+        } else if ([packageName hasPrefix:@"_CATEGORY_"]) {
+            return @""; // Don't show anything in name column for category headers
+        } else {
+            return packageName; // Show normal package name
+        }
+    } else if ([[tableColumn identifier] isEqualToString:@"desc"]) {
+        // Show the description (which contains the formatted text)
+        return [package objectForKey:@"desc"];
+    } else if ([[tableColumn identifier] isEqualToString:@"install"]) {
+        // Don't show install button for headers/categories
+        if ([packageName hasPrefix:@"_HEADER_"] || [packageName hasPrefix:@"_CATEGORY_"]) {
+            return @"";
+        } else {
+            return [[package objectForKey:@"installed"] boolValue] ? @"Installed" : @"Install";
+        }
+    } else if ([[tableColumn identifier] isEqualToString:@"uninstall"]) {
+        // Don't show uninstall button for headers/categories
+        if ([packageName hasPrefix:@"_HEADER_"] || [packageName hasPrefix:@"_CATEGORY_"]) {
+            return @"";
+        } else {
+            return [[package objectForKey:@"installed"] boolValue] ? @"Uninstall" : @"-";
+        }
+    } else if ([[tableColumn identifier] isEqualToString:@"icon"]) {
+        // Don't show icon for headers/categories
+        if ([packageName hasPrefix:@"_HEADER_"] || [packageName hasPrefix:@"_CATEGORY_"]) {
+            return @"";
+        } else {
+            return [package objectForKey:[tableColumn identifier]];
+        }
+    }
+    
+    return [package objectForKey:[tableColumn identifier]];
+}
+
+- (void)tableView:(NSTableView *)tableView setObjectValue:(id)object forTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row
+{
+    NSDictionary *packageDict = [packages objectAtIndex:row];
+    NSString *packageName = [packageDict objectForKey:@"name"];
+    
+    // Don't allow actions on headers or categories
+    if ([packageName hasPrefix:@"_HEADER_"] || [packageName hasPrefix:@"_CATEGORY_"]) {
+        return;
+    }
+    
+    Package *package = [Package packageFromDictionary:packageDict];
+    
+    if ([[tableColumn identifier] isEqualToString:@"install"] && [object isEqualToString:@"Install"]) {
+        [self packageDetailWindow:nil requestInstallFor:package];
+    } else if ([[tableColumn identifier] isEqualToString:@"uninstall"] && [object isEqualToString:@"Uninstall"]) {
+        [self packageDetailWindow:nil requestUninstallFor:package];
+    }
+}
+
+- (void)showDetails:(id)sender
+{
+    NSInteger selectedRow = [packageTable selectedRow];
+    if (selectedRow < 0) return;
+    
+    NSDictionary *packageDict = [packages objectAtIndex:selectedRow];
+    NSString *packageName = [packageDict objectForKey:@"name"];
+    
+    // Don't show details for headers or categories
+    if ([packageName hasPrefix:@"_HEADER_"] || [packageName hasPrefix:@"_CATEGORY_"]) {
+        return;
+    }
+    
+    Package *package = [Package packageFromDictionary:packageDict];
+    [self.detailWindow showDetailsForPackage:package];
+}
+
+- (void)reauthenticateIfNeeded
+{
+    SudoManager *sudoManager = [SudoManager sharedManager];
+    if ([sudoManager hasCachedSudoAccess]) {
+        return; // Already authenticated
+    }
+    
+    [self.passwordPanel showPasswordPanelWithTitle:@"Re-authentication Required"
+                                           message:@"Please re-enter your password to continue:"
+                                        completion:^(NSString *password, BOOL cancelled) {
+        if (!cancelled && password) {
+            NSString *authError = nil;
+            if ([sudoManager validateSudoWithPassword:password error:&authError]) {
+                [self updateStatusText:@"Ready"];
+            } else {
+                NSRunAlertPanel(@"Authentication Failed", 
+                               authError ?: @"Invalid password.", 
+                               @"OK", nil, nil);
+            }
+        }
+    }];
+}
+
+#pragma mark - Memory Management
+
+- (void)dealloc
+{
+    [window release];
+    [featuredButton release];
+    [categoriesButton release];
+    [updatesButton release];
+    [searchField release];
+    [suggestionsMenu release];
+    [packageTable release];
+    [scrollView release];
+    [searchProgress release];
+    [updateProgress release];
+    [packages release];
+    [searchTimer release];
+    [updateCheckTimer release];
+    [updateStatus release];
+    [categoryLabel release];
+    [welcomeLabel release];  // Add welcome label to dealloc
+    [welcomeElements release];  // Add welcome elements array to dealloc
+    [headerElements release];   // Add header elements array to dealloc
+    [packageManager release];
+    [passwordPanel release];
+    [detailWindow release];
+    [categoryWindow release];
+    [super dealloc];
+}
+
+@end
